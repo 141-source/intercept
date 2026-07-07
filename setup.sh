@@ -817,6 +817,10 @@ install_rtlamr_from_source() {
     if [[ "$OS" == "macos" ]]; then
       info "Installing Go via Homebrew..."
       brew_install go || { warn "Failed to install Go. Cannot install rtlamr."; return 1; }
+    elif [[ "$OS" == "arch" ]]; then
+      info "Installing Go via pacman..."
+      wait_for_pacman_lock
+      $SUDO pacman -S --noconfirm --needed go >/dev/null 2>&1 || { warn "Failed to install Go. Cannot install rtlamr."; return 1; }
     else
       info "Installing Go via apt..."
       $SUDO apt-get install -y golang >/dev/null 2>&1 || { warn "Failed to install Go. Cannot install rtlamr."; return 1; }
@@ -1395,10 +1399,22 @@ install_dump1090_from_source_debian() {
 
 # --- acarsdec (Debian from source) ---
 install_acarsdec_from_source_debian() {
-  info "acarsdec not available via APT. Building from source..."
+  info "acarsdec not available via package manager. Building from source..."
 
-  apt_install build-essential git cmake \
-    librtlsdr-dev libusb-1.0-0-dev libsndfile1-dev
+  if [[ "$OS" == "debian" ]]; then
+    apt_install build-essential git cmake \
+      librtlsdr-dev libusb-1.0-0-dev libsndfile1-dev
+  elif [[ "$OS" == "arch" ]]; then
+    local mapped_deps=(
+      "$(get_package_name "build-essential")"
+      git
+      cmake
+      "$(get_package_name "librtlsdr-dev")"
+      "$(get_package_name "libusb-1.0-0-dev")"
+      libsndfile
+    )
+    pacman_install "${mapped_deps[@]}"
+  fi
 
   (
     tmp_dir="$(mktemp -d)"
@@ -1421,12 +1437,25 @@ install_acarsdec_from_source_debian() {
   )
 }
 
-# --- dumpvdl2 (Debian from source, with libacars) ---
+# --- dumpvdl2 (Debian/Arch from source, with libacars) ---
 install_dumpvdl2_from_source_debian() {
   info "Building dumpvdl2 from source (with libacars dependency)..."
 
-  apt_install build-essential git cmake \
-    librtlsdr-dev libusb-1.0-0-dev libglib2.0-dev libxml2-dev
+  if [[ "$OS" == "debian" ]]; then
+    apt_install build-essential git cmake \
+      librtlsdr-dev libusb-1.0-0-dev libglib2.0-dev libxml2-dev
+  elif [[ "$OS" == "arch" ]]; then
+    local mapped_deps=(
+      "$(get_package_name "build-essential")"
+      git
+      cmake
+      "$(get_package_name "librtlsdr-dev")"
+      "$(get_package_name "libusb-1.0-0-dev")"
+      glib2
+      libxml2
+    )
+    pacman_install "${mapped_deps[@]}"
+  fi
 
   (
     tmp_dir="$(mktemp -d)"
@@ -1466,12 +1495,26 @@ install_dumpvdl2_from_source_debian() {
   )
 }
 
-# --- AIS-catcher (Debian from source) ---
+# --- AIS-catcher (Debian/Arch from source) ---
 install_aiscatcher_from_source_debian() {
-  info "AIS-catcher not available via APT. Building from source..."
+  info "AIS-catcher not available via package manager. Building from source..."
 
-  apt_install build-essential git cmake pkg-config \
-    librtlsdr-dev libusb-1.0-0-dev libcurl4-openssl-dev zlib1g-dev
+  if [[ "$OS" == "debian" ]]; then
+    apt_install build-essential git cmake pkg-config \
+      librtlsdr-dev libusb-1.0-0-dev libcurl4-openssl-dev zlib1g-dev
+  elif [[ "$OS" == "arch" ]]; then
+    local mapped_deps=(
+      "$(get_package_name "build-essential")"
+      git
+      cmake
+      "$(get_package_name "pkg-config")"
+      "$(get_package_name "librtlsdr-dev")"
+      "$(get_package_name "libusb-1.0-0-dev")"
+      "$(get_package_name "libcurl4-openssl-dev")"
+      "$(get_package_name "zlib1g-dev")"
+    )
+    pacman_install "${mapped_deps[@]}"
+  fi
 
   (
     tmp_dir="$(mktemp -d)"
@@ -1498,7 +1541,19 @@ install_aiscatcher_from_source_debian() {
 install_ubertooth_from_source_debian() {
   info "Building Ubertooth from source..."
 
-  apt_install build-essential git cmake libusb-1.0-0-dev pkg-config libbluetooth-dev
+  if [[ "$OS" == "debian" ]]; then
+    apt_install build-essential git cmake libusb-1.0-0-dev pkg-config libbluetooth-dev
+  elif [[ "$OS" == "arch" ]]; then
+    local mapped_deps=(
+      "$(get_package_name "build-essential")"
+      git
+      cmake
+      "$(get_package_name "libusb-1.0-0-dev")"
+      "$(get_package_name "pkg-config")"
+      "$(get_package_name "libbluetooth-dev")"
+    )
+    pacman_install "${mapped_deps[@]}"
+  fi
 
   (
     tmp_dir="$(mktemp -d)"
@@ -1522,11 +1577,22 @@ install_ubertooth_from_source_debian() {
   )
 }
 
-# --- RTL-SDR Blog drivers (Debian from source) ---
+# --- RTL-SDR Blog drivers (Debian/Arch from source) ---
 install_rtlsdr_blog_drivers_debian() {
   info "Installing RTL-SDR Blog drivers (improved V4 support)..."
 
-  apt_install build-essential git cmake libusb-1.0-0-dev pkg-config
+  if [[ "$OS" == "debian" ]]; then
+    apt_install build-essential git cmake libusb-1.0-0-dev pkg-config
+  elif [[ "$OS" == "arch" ]]; then
+    local mapped_deps=(
+      "$(get_package_name "build-essential")"
+      git
+      cmake
+      "$(get_package_name "libusb-1.0-0-dev")"
+      "$(get_package_name "pkg-config")"
+    )
+    pacman_install "${mapped_deps[@]}"
+  fi
 
   (
     tmp_dir="$(mktemp -d)"
@@ -2426,7 +2492,7 @@ do_postgres_setup() {
 
   # Create user + database
   info "Creating database user and database..."
-  if [[ "$OS" == "debian" ]]; then
+  if [[ "$OS" == "debian" || "$OS" == "arch" ]]; then
     # Use postgres superuser
     $SUDO -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${db_user}') THEN CREATE ROLE ${db_user} WITH LOGIN PASSWORD '${db_pass}'; END IF; END \$\$;" 2>/dev/null || {
       warn "Failed to create user (may already exist)"
