@@ -165,6 +165,11 @@ if [[ "$HOST" == "0.0.0.0" ]]; then
     if [[ -z "$LAN_IP" ]]; then
         LAN_IP=$(ipconfig getifaddr en1 2>/dev/null || true)
     fi
+    # Try 'ip' command (works on all modern Linux systems including Arch/Manjaro)
+    if [[ -z "$LAN_IP" ]]; then
+        LAN_IP=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}(?=/)' | grep -v 127.0.0.1 | head -1 || true)
+    fi
+    # Fallback to ifconfig parsing
     if [[ -z "$LAN_IP" ]]; then
         LAN_IP=$(ifconfig 2>/dev/null | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $2}' || true)
     fi

@@ -149,10 +149,12 @@ detect_os() {
     OS="macos"
   elif [[ -f /etc/debian_version ]]; then
     OS="debian"
+  elif [[ -f /etc/arch-release ]] || grep -qi "arch\|manjaro" /etc/os-release 2>/dev/null; then
+    OS="arch"
   else
     OS="unknown"
   fi
-  [[ "$OS" != "unknown" ]] || { fail "Unsupported OS (macOS + Debian/Ubuntu only)."; exit 1; }
+  [[ "$OS" != "unknown" ]] || { fail "Unsupported OS (macOS, Debian/Ubuntu, or Arch/Manjaro only)."; exit 1; }
 }
 
 detect_dragonos() {
@@ -531,6 +533,15 @@ install_python_deps() {
       warn "python3-skyfield not in apt, will try pip later"
     fi
     ok "Installed available Python packages via apt"
+  elif [[ "$OS" == "arch" ]]; then
+    info "Installing Python packages via pacman (more reliable on Arch/Manjaro)..."
+    wait_for_pacman_lock
+    $SUDO pacman -S --noconfirm --needed python-flask python-requests python-pyserial >/dev/null 2>&1 || true
+    
+    if ! $SUDO pacman -S --noconfirm --needed python-skyfield >/dev/null 2>&1; then
+      warn "python-skyfield not in pacman, will try pip later"
+    fi
+    ok "Installed available Python packages via pacman"
   fi
 
   if [[ ! -d venv ]]; then
@@ -685,6 +696,113 @@ apt_install_if_missing() {
     return 0
   fi
   apt_install "$pkg"
+}
+
+# ---- Pacman (Arch/Manjaro) functions ----
+
+pacman_install() {
+  local pkgs="$*"
+  local output
+  local ret=0
+  output=$($SUDO pacman -S --noconfirm --needed "$@" 2>&1) || ret=$?
+  if [[ $ret -ne 0 ]]; then
+    fail "Failed to install: $pkgs"
+    echo "$output" | tail -10
+    fail "Try running: sudo pacman -Sy && sudo pacman -S $pkgs"
+    return 1
+  fi
+}
+
+wait_for_pacman_lock() {
+  local max_wait=120
+  local waited=0
+  while [[ -f /var/lib/pacman/db.lck ]]; do
+    if [[ $waited -eq 0 ]]; then
+      info "Waiting for pacman lock (another package manager is running)..."
+    fi
+    sleep 5
+    waited=$((waited + 5))
+    if [[ $waited -ge $max_wait ]]; then
+      warn "pacman lock held for over ${max_wait}s. Continuing anyway (may fail)."
+      return 1
+    fi
+  done
+  return 0
+}
+
+pacman_try_install_any() {
+  wait_for_pacman_lock
+  local p
+  for p in "$@"; do
+    if $SUDO pacman -S --noconfirm --needed "$p" >/dev/null 2>&1; then
+      ok "pacman: installed ${p}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pacman_install_if_missing() {
+  local pkg="$1"
+  if pacman -Qi "$pkg" >/dev/null 2>&1; then
+    ok "pacman: ${pkg} already installed"
+    return 0
+  fi
+  pacman_install "$pkg"
+}
+
+# Map package names between distributions
+get_package_name() {
+  local pkg="$1"  # package name in Debian format
+  
+  # For Arch, map Debian package names to their Arch equivalents
+  case "$pkg" in
+    # Build essentials
+    build-essential) [[ "$OS" == "arch" ]] && echo "base-devel" || echo "build-essential" ;;
+    # Libraries - general
+    git) echo "git" ;;
+    cmake) echo "cmake" ;;
+    pkg-config) echo "pkg-config" ;;
+    # Core radio libraries
+    libusb-1.0-0-dev) [[ "$OS" == "arch" ]] && echo "libusb" || echo "libusb-1.0-0-dev" ;;
+    libusb-dev) [[ "$OS" == "arch" ]] && echo "libusb" || echo "libusb-dev" ;;
+    # Bluetooth
+    libbluetooth-dev) [[ "$OS" == "arch" ]] && echo "bluez-libs" || echo "libbluetooth-dev" ;;
+    # Image/media libraries
+    libpng-dev) [[ "$OS" == "arch" ]] && echo "libpng" || echo "libpng-dev" ;;
+    libtiff-dev) [[ "$OS" == "arch" ]] && echo "libtiff" || echo "libtiff-dev" ;;
+    libzstd-dev) [[ "$OS" == "arch" ]] && echo "zstd" || echo "libzstd-dev" ;;
+    zlib1g-dev) [[ "$OS" == "arch" ]] && echo "zlib" || echo "zlib1g-dev" ;;
+    # Database
+    libsqlite3-dev) [[ "$OS" == "arch" ]] && echo "sqlite" || echo "libsqlite3-dev" ;;
+    # Network/SSL
+    libcurl4-openssl-dev) [[ "$OS" == "arch" ]] && echo "curl" || echo "libcurl4-openssl-dev" ;;
+    libzmq3-dev) [[ "$OS" == "arch" ]] && echo "zeromq" || echo "libzmq3-dev" ;;
+    # DSP
+    libfftw3-dev) [[ "$OS" == "arch" ]] && echo "fftw" || echo "libfftw3-dev" ;;
+    libvolk-dev|libvolk2-dev) [[ "$OS" == "arch" ]] && echo "volk" || echo "$pkg" ;;
+    # Optional/Advanced
+    libjemalloc-dev) [[ "$OS" == "arch" ]] && echo "jemalloc" || echo "libjemalloc-dev" ;;
+    libnng-dev) [[ "$OS" == "arch" ]] && echo "nng" || echo "libnng-dev" ;;
+    libsoapysdr-dev) [[ "$OS" == "arch" ]] && echo "soapysdr" || echo "libsoapysdr-dev" ;;
+    libhackrf-dev) [[ "$OS" == "arch" ]] && echo "hackrf" || echo "libhackrf-dev" ;;
+    liblimesuite-dev) [[ "$OS" == "arch" ]] && echo "limesuite" || echo "liblimesuite-dev" ;;
+    # Tools
+    rtl-sdr) echo "rtl-sdr" ;;  # Same on both
+    multimon-ng) echo "multimon-ng" ;;  # Same on both
+    ffmpeg) echo "ffmpeg" ;;  # Same on both
+    gpsd) echo "gpsd" ;;  # Same on both
+    # Fallback - return as-is
+    *) echo "$pkg" ;;
+  esac
+}
+
+# Map multiple packages at once
+get_package_names() {
+  local pkg
+  for pkg in "$@"; do
+    get_package_name "$pkg"
+  done
 }
 
 # ============================================================
@@ -984,21 +1102,42 @@ install_aiscatcher_from_source_macos() {
   )
 }
 
-# --- SatDump (Debian from source) ---
+# --- SatDump (Debian/Arch from source) ---
 install_satdump_from_source_debian() {
   info "Building SatDump v1.2.2 from source (weather satellite decoder)..."
 
-  apt_install build-essential git cmake pkg-config \
-    libpng-dev libtiff-dev libzstd-dev \
+  # Install build dependencies with proper package name mapping
+  local deps=(
+    build-essential git cmake pkg-config
+    libpng-dev libtiff-dev libzstd-dev
     libsqlite3-dev libcurl4-openssl-dev zlib1g-dev libzmq3-dev libfftw3-dev
-
-  apt_try_install_any libvolk-dev libvolk2-dev \
-    || warn "libvolk not found — SatDump will build without VOLK acceleration"
-
-  for pkg in libjemalloc-dev libnng-dev libsoapysdr-dev libhackrf-dev liblimesuite-dev; do
-    $SUDO apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1 \
-      || warn "${pkg} not available — skipping (SatDump can build without it)"
-  done
+  )
+  
+  if [[ "$OS" == "debian" ]]; then
+    apt_install "${deps[@]}"
+    apt_try_install_any libvolk-dev libvolk2-dev \
+      || warn "libvolk not found — SatDump will build without VOLK acceleration"
+    
+    for pkg in libjemalloc-dev libnng-dev libsoapysdr-dev libhackrf-dev liblimesuite-dev; do
+      $SUDO apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1 \
+        || warn "${pkg} not available — skipping (SatDump can build without it)"
+    done
+  elif [[ "$OS" == "arch" ]]; then
+    # Map and install for Arch
+    local mapped_deps=()
+    for dep in "${deps[@]}"; do
+      mapped_deps+=("$(get_package_name "$dep")")
+    done
+    pacman_install "${mapped_deps[@]}"
+    
+    pacman_try_install_any volk \
+      || warn "volk not found — SatDump will build without VOLK acceleration"
+    
+    for pkg in jemalloc nng soapysdr hackrf limesuite; do
+      $SUDO pacman -S --noconfirm --needed "$pkg" >/dev/null 2>&1 \
+        || warn "${pkg} not available — skipping (SatDump can build without it)"
+    done
+  fi
 
   (
     tmp_dir="$(mktemp -d)"
@@ -1177,12 +1316,25 @@ install_radiosonde_auto_rx() {
 
 # --- dump1090 (Debian from source) ---
 install_dump1090_from_source_debian() {
-  info "dump1090 not available via APT. Building from source (this may take a few minutes)..."
+  info "dump1090 not available via package manager. Building from source (this may take a few minutes)..."
 
   info "Installing build dependencies for dump1090..."
-  apt_install build-essential git pkg-config \
-    librtlsdr-dev libusb-1.0-0-dev \
-    libncurses-dev tcl-dev python3-dev
+  
+  if [[ "$OS" == "debian" ]]; then
+    apt_install build-essential git pkg-config \
+      librtlsdr-dev libusb-1.0-0-dev \
+      libncurses-dev tcl-dev python3-dev
+  elif [[ "$OS" == "arch" ]]; then
+    local mapped_deps=(
+      "$(get_package_name "build-essential")"
+      git
+      "$(get_package_name "pkg-config")"
+      "$(get_package_name "librtlsdr-dev")"
+      "$(get_package_name "libusb-1.0-0-dev")"
+      ncurses tcl python
+    )
+    pacman_install "${mapped_deps[@]}"
+  fi
 
   local JOBS
   JOBS="$(nproc 2>/dev/null || echo 1)"
@@ -1476,6 +1628,8 @@ EOF
 install_tool_rtl_sdr() {
   if [[ "$OS" == "macos" ]]; then
     brew_install librtlsdr
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install_if_missing rtl-sdr
   else
     if ! $IS_DRAGONOS; then
       # Handle librtlsdr package conflicts
@@ -1522,6 +1676,8 @@ install_tool_multimon_ng() {
     else
       ok "multimon-ng already installed"
     fi
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install_if_missing multimon-ng
   else
     apt_install multimon-ng
   fi
@@ -1530,6 +1686,8 @@ install_tool_multimon_ng() {
 install_tool_rtl_433() {
   if [[ "$OS" == "macos" ]]; then
     brew_install rtl_433
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_try_install_any rtl_433 rtl-433 || warn "rtl-433 not available"
   else
     apt_try_install_any rtl-433 rtl433 || warn "rtl-433 not available"
   fi
@@ -1542,6 +1700,9 @@ install_tool_dump1090() {
     else
       ok "dump1090 already installed"
     fi
+  elif [[ "$OS" == "arch" ]]; then
+    # Arch doesn't have a dump1090 package, so build from source
+    cmd_exists dump1090 || install_dump1090_from_source_debian || warn "dump1090 not available"
   else
     # Remove stale symlinks
     local dump1090_path
@@ -1598,6 +1759,8 @@ install_tool_dumpvdl2() {
 install_tool_ffmpeg() {
   if [[ "$OS" == "macos" ]]; then
     brew_install ffmpeg
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install_if_missing ffmpeg
   else
     apt_install ffmpeg
   fi
@@ -1606,6 +1769,8 @@ install_tool_ffmpeg() {
 install_tool_gpsd() {
   if [[ "$OS" == "macos" ]]; then
     brew_install gpsd
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install_if_missing gpsd || true
   else
     apt_install gpsd gpsd-clients || true
   fi
@@ -1614,6 +1779,8 @@ install_tool_gpsd() {
 install_tool_hackrf() {
   if [[ "$OS" == "macos" ]]; then
     brew_install hackrf
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install hackrf || warn "hackrf tools not available"
   else
     apt_install hackrf || warn "hackrf tools not available"
   fi
@@ -1704,6 +1871,8 @@ install_tool_radiosonde() {
 install_tool_aircrack_ng() {
   if [[ "$OS" == "macos" ]]; then
     brew_install aircrack-ng
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install aircrack-ng || true
   else
     apt_install aircrack-ng || true
   fi
@@ -1712,6 +1881,8 @@ install_tool_aircrack_ng() {
 install_tool_hcxdumptool() {
   if [[ "$OS" == "debian" ]]; then
     apt_install hcxdumptool || true
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install hcxdumptool || true
   fi
   # Not available on macOS
 }
@@ -1719,6 +1890,8 @@ install_tool_hcxdumptool() {
 install_tool_hcxtools() {
   if [[ "$OS" == "macos" ]]; then
     brew_install hcxtools
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install hcxtools || true
   else
     apt_install hcxtools || true
   fi
@@ -1728,6 +1901,8 @@ install_tool_bluez() {
   if [[ "$OS" == "macos" ]]; then
     warn "macOS note: hcitool/hciconfig are Linux (BlueZ) utilities and often unavailable on macOS."
     info "TSCM BLE scanning uses bleak library (installed via pip) for manufacturer data detection."
+  elif [[ "$OS" == "arch" ]]; then
+    pacman_install bluez || true
   else
     apt_install bluez bluetooth || true
   fi
@@ -1740,6 +1915,8 @@ install_tool_ubertooth() {
     if ask_yes_no "Do you want to install Ubertooth tools?"; then
       if [[ "$OS" == "macos" ]]; then
         brew_install ubertooth || warn "Ubertooth not available via Homebrew"
+      elif [[ "$OS" == "arch" ]]; then
+        pacman_install ubertooth || install_ubertooth_from_source_debian
       else
         apt_install libubertooth-dev ubertooth || install_ubertooth_from_source_debian
       fi
@@ -1859,8 +2036,8 @@ install_profiles() {
     ok "leaflet-heat plugin already present"
   fi
 
-  # Debian post-install
-  if [[ "$OS" == "debian" ]]; then
+  # Linux post-install (both Debian and Arch)
+  if [[ "$OS" == "debian" || "$OS" == "arch" ]]; then
     progress "Configuring udev rules"
     setup_udev_rules_debian
 
@@ -1942,6 +2119,11 @@ install_custom() {
     info "Updating APT package lists..."
     $SUDO apt-get update -y >/dev/null 2>&1 || true
     apt_install python3-venv python3-pip python3-dev || true
+  elif [[ "$OS" == "arch" ]]; then
+    info "Updating pacman package lists..."
+    wait_for_pacman_lock
+    $SUDO pacman -Sy --noconfirm >/dev/null 2>&1 || true
+    pacman_install python python-pip || true
   fi
 
   if [[ "$OS" == "macos" ]]; then
@@ -2165,6 +2347,19 @@ do_postgres_setup() {
         fail "PostgreSQL is required for ADS-B history."
         return 1
       fi
+    elif [[ "$OS" == "arch" ]]; then
+      if ask_yes_no "Install PostgreSQL via pacman?" "y"; then
+        info "Installing PostgreSQL (this may take a moment)..."
+        wait_for_pacman_lock
+        $SUDO pacman -S --noconfirm --needed postgresql >/dev/null 2>&1 || {
+          fail "Failed to install PostgreSQL"
+          return 1
+        }
+        ok "PostgreSQL installed"
+      else
+        fail "PostgreSQL is required for ADS-B history."
+        return 1
+      fi
     elif [[ "$OS" == "macos" ]]; then
       if ask_yes_no "Install PostgreSQL via Homebrew?" "y"; then
         brew_install postgresql@16 || brew_install postgresql || {
@@ -2186,6 +2381,13 @@ do_postgres_setup() {
     if ! $SUDO systemctl is-active --quiet postgresql 2>/dev/null; then
       info "Starting PostgreSQL service..."
       $SUDO systemctl start postgresql || $SUDO service postgresql start || true
+      $SUDO systemctl enable postgresql 2>/dev/null || true
+    fi
+    ok "PostgreSQL service running"
+  elif [[ "$OS" == "arch" ]]; then
+    if ! $SUDO systemctl is-active --quiet postgresql 2>/dev/null; then
+      info "Starting PostgreSQL service..."
+      $SUDO systemctl start postgresql || true
       $SUDO systemctl enable postgresql 2>/dev/null || true
     fi
     ok "PostgreSQL service running"
